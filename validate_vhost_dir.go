@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
   "log"
-	// "strings"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2"
   "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -86,6 +86,23 @@ func (m ValidateVhostDir) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	if len(domain) > 4 && domain[:4] == "www." {
 		domain = domain[4:]
 		log.Printf("[ValidateVhostDir] Stripped www. prefix, domain is now: %s", domain)
+	}
+
+	// Never authorize on-demand ACME for *.siterubix.com (or the apex). Every
+	// siterubix subdomain is served from the single loaded *.siterubix.com
+	// wildcard cert (installed as /etc/caddy2/certs/siterubix-wildcard.* and
+	// renewed fleet-wide by renew_siterubix_wildcard_cert.pl), so caddy already
+	// has a matching cert in its pool and does not need to issue one. Returning
+	// 404 here refuses per-domain issuance -- which would otherwise burn the
+	// Let's Encrypt "certificates per registered domain" rate limit for
+	// siterubix.com and pointlessly churn a per-domain cert for a name the
+	// wildcard already covers. (Belt-and-suspenders with the loaded wildcard:
+	// on-demand only ever fires on a pool miss, but if the wildcard were ever
+	// absent we still must not fall back to per-domain siterubix issuance.)
+	if domain == "siterubix.com" || strings.HasSuffix(domain, ".siterubix.com") {
+		log.Printf("[ValidateVhostDir] %s is siterubix; refusing on-demand issuance (served from *.siterubix.com wildcard)", domain)
+		w.WriteHeader(http.StatusNotFound)
+		return nil
 	}
 
 	dirPath := filepath.Join(m.VhostsPath, domain)
